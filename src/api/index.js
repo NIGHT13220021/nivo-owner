@@ -14,9 +14,11 @@ api.interceptors.response.use(
   res => res,
   err => {
     if (err.response?.status === 401) {
+      const hadToken = !!localStorage.getItem('nivo_owner_token')
       localStorage.removeItem('nivo_owner_token')
       localStorage.removeItem('nivo_owner_role')
-      window.location.href = '/'
+      // Only redirect if a session existed (expired token), not on login failures
+      if (hadToken) window.location.href = '/'
     }
     return Promise.reject(err)
   }
