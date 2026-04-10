@@ -13,6 +13,26 @@ const T = {
   font:"'Plus Jakarta Sans',sans-serif",
 }
 
+const toUTC=d=>new Date(typeof d==='string'&&!d.includes('Z')&&!d.includes('+')&&!d.includes('-',10)?d.replace(' ','T')+'Z':d)
+
+function buildRevChart(orders, days) {
+  const today = new Date()
+  const map = {}
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(today); d.setDate(d.getDate() - i)
+    const key = d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })
+    map[key] = 0
+  }
+  orders
+    .filter(o => o.payment_status === 'paid')
+    .forEach(o => {
+      const d = toUTC(o.created_at)
+      const key = d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })
+      if (key in map) map[key] = (map[key] || 0) + (o.total || 0)
+    })
+  return Object.entries(map).map(([day, rev]) => ({ day, rev }))
+}
+
 const ChartTT=({active,payload,label})=>{
   if(!active||!payload?.length)return null
   return<div style={{background:T.white,border:`1.5px solid ${T.border2}`,borderRadius:10,padding:'8px 14px',boxShadow:T.shadow,fontFamily:T.font}}><div style={{fontSize:10,color:T.muted2,letterSpacing:'1px',textTransform:'uppercase',marginBottom:2}}>{label}</div><div style={{fontSize:16,fontWeight:700,color:T.blue}}>₹{(payload[0]?.value||0).toLocaleString()}</div></div>
@@ -20,19 +40,25 @@ const ChartTT=({active,payload,label})=>{
 
 export default function Analytics(){
   const [data,setData]=useState(null)
+  const [orders,setOrders]=useState([])
   const [loading,setLoading]=useState(true)
   const [range,setRange]=useState('30')
 
   useEffect(()=>{
-    const load=async()=>{try{const r=await api.get('/api/admin/analytics');setData(r.data)}catch(e){console.error(e)}finally{setLoading(false)}}
+    const load=async()=>{
+      try{
+        const [r,o]=await Promise.all([api.get('/api/admin/analytics'),api.get('/api/admin/orders?limit=500')])
+        setData(r.data); setOrders(o.data.orders||[])
+      }catch(e){console.error(e)}finally{setLoading(false)}
+    }
     load()
   },[])
 
-  const totalRevenue=data?.revenue_chart?.reduce((s,d)=>s+(d.rev||0),0)||0
-  const totalDays=data?.revenue_chart?.length||0
-  const avgDaily=totalDays?Math.round(totalRevenue/totalDays):0
-  const peakDay=data?.revenue_chart?.reduce((a,b)=>((b.rev||0)>(a.rev||0)?b:a),{day:'—',rev:0})||{}
-  const chartData=range==='7'?(data?.revenue_chart||[]).slice(-7):data?.revenue_chart||[]
+  const chartData = buildRevChart(orders, parseInt(range))
+  const totalRevenue = chartData.reduce((s,d)=>s+(d.rev||0),0)
+  const daysWithData = chartData.filter(d=>d.rev>0).length
+  const avgDaily = daysWithData ? Math.round(totalRevenue/daysWithData) : 0
+  const peakDay = chartData.reduce((a,b)=>((b.rev||0)>(a.rev||0)?b:a),{day:'—',rev:0})||{}
   const medals=['🥇','🥈','🥉']
   const barColors=[T.blue,T.green,T.purple,T.amber,'#0EA5E9']
 
@@ -62,7 +88,7 @@ export default function Analytics(){
               {[['7','7 Days'],['30','30 Days']].map(([val,lbl])=><button key={val} onClick={()=>setRange(val)} style={{padding:'5px 12px',borderRadius:7,border:'none',background:range===val?T.blue:'transparent',color:range===val?'#fff':T.muted,fontSize:11,fontWeight:600,fontFamily:T.font,cursor:'pointer',transition:'all 0.15s'}}>{lbl}</button>)}
             </div>
           </div>
-          {chartData.length>0?<ResponsiveContainer width="100%" height={200}><AreaChart data={chartData}><defs><linearGradient id="rg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={T.blue} stopOpacity={0.15}/><stop offset="100%" stopColor={T.blue} stopOpacity={0}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke={T.border} vertical={false}/><XAxis dataKey="day" tick={{fill:T.muted2,fontSize:10,fontFamily:T.font}} axisLine={false} tickLine={false}/><YAxis tick={{fill:T.muted2,fontSize:10}} axisLine={false} tickLine={false} tickFormatter={v=>`₹${v}`}/><Tooltip content={<ChartTT/>}/><Area type="monotone" dataKey="rev" stroke={T.blue} strokeWidth={2.5} fill="url(#rg)" dot={false} activeDot={{r:4,fill:T.blue,stroke:T.white,strokeWidth:2}}/></AreaChart></ResponsiveContainer>:<div style={{height:200,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',color:T.muted2}}><div style={{fontSize:30,opacity:0.2,marginBottom:8}}>∿</div><div style={{fontSize:13}}>No revenue data yet</div></div>}
+          {chartData.some(d=>d.rev>0)?<ResponsiveContainer width="100%" height={200}><AreaChart data={chartData}><defs><linearGradient id="rg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={T.blue} stopOpacity={0.15}/><stop offset="100%" stopColor={T.blue} stopOpacity={0}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke={T.border} vertical={false}/><XAxis dataKey="day" tick={{fill:T.muted2,fontSize:10,fontFamily:T.font}} axisLine={false} tickLine={false}/><YAxis tick={{fill:T.muted2,fontSize:10}} axisLine={false} tickLine={false} tickFormatter={v=>`₹${v}`}/><Tooltip content={<ChartTT/>}/><Area type="monotone" dataKey="rev" stroke={T.blue} strokeWidth={2.5} fill="url(#rg)" dot={false} activeDot={{r:4,fill:T.blue,stroke:T.white,strokeWidth:2}}/></AreaChart></ResponsiveContainer>:<div style={{height:200,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',color:T.muted2}}><div style={{fontSize:30,opacity:0.2,marginBottom:8}}>∿</div><div style={{fontSize:13}}>No paid orders in last {range} days</div></div>}
         </div>
 
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,animation:'fu 0.4s ease 0.15s both'}}>

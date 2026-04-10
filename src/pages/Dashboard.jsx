@@ -485,6 +485,72 @@ function WeeklySummary({ summary=null }) {
   )
 }
 
+// ─── Timezone fix: DB stores UTC without Z, force UTC parsing ─────────────────
+const toUTC=d=>new Date(typeof d==='string'&&!d.includes('Z')&&!d.includes('+')&&!d.includes('-',10)?d.replace(' ','T')+'Z':d)
+
+// ─── Revenue / Inventory Helpers ──────────────────────────────────────────────
+
+function buildRevChart(orders, days) {
+  const today = new Date()
+  const map = {}
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(today); d.setDate(d.getDate() - i)
+    const key = d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })
+    map[key] = 0
+  }
+  orders
+    .filter(o => o.payment_status === 'paid')
+    .forEach(o => {
+      const d = toUTC(o.created_at)
+      const key = d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })
+      if (key in map) map[key] = (map[key] || 0) + (o.total || 0)
+    })
+  return Object.entries(map).map(([day, rev]) => ({ day, rev }))
+}
+
+function calcStoreAgeDays(orders) {
+  const paid = orders.filter(o => o.payment_status === 'paid')
+  if (!paid.length) return 0
+  const sorted = [...paid].sort((a, b) => toUTC(a.created_at) - toUTC(b.created_at))
+  return Math.floor((Date.now() - toUTC(sorted[0].created_at)) / 86400000)
+}
+
+function buildWeeklySummary(orders) {
+  const today = new Date(); today.setHours(23, 59, 59, 999)
+  const w0 = new Date(today); w0.setDate(today.getDate() - 6); w0.setHours(0, 0, 0, 0)
+  const w1 = new Date(w0); w1.setDate(w0.getDate() - 7)
+  const paid = orders.filter(o => o.payment_status === 'paid')
+  const tw = paid.filter(o => toUTC(o.created_at) >= w0)
+  const lw = paid.filter(o => { const d = toUTC(o.created_at); return d >= w1 && d < w0 })
+  const twRev = tw.reduce((s, o) => s + (o.total || 0), 0)
+  const lwRev = lw.reduce((s, o) => s + (o.total || 0), 0)
+  const dayMap = {}
+  tw.forEach(o => {
+    const k = toUTC(o.created_at).toLocaleDateString('en-IN', { weekday: 'long', day: '2-digit', month: 'short' })
+    dayMap[k] = (dayMap[k] || 0) + (o.total || 0)
+  })
+  const best = Object.entries(dayMap).sort((a, b) => b[1] - a[1])[0]
+  const twCust = new Set(tw.map(o => o.users?.phone).filter(Boolean))
+  const lwCust = new Set(lw.map(o => o.users?.phone).filter(Boolean))
+  const pct = lwRev ? Math.round(((twRev - lwRev) / lwRev) * 100) : null
+  const insight = !twRev
+    ? 'Start selling to see weekly insights.'
+    : !lwRev ? `First week of data! ₹${twRev.toLocaleString()} across ${tw.length} orders.`
+    : pct > 20 ? `Revenue up ${pct}% this week — keep top products stocked!`
+    : pct < -20 ? `Revenue dipped ${Math.abs(pct)}% — consider a promotion this week.`
+    : `Steady week — ₹${twRev.toLocaleString()} across ${tw.length} orders.`
+  return {
+    this_week_revenue: twRev, last_week_revenue: lwRev,
+    this_week_orders: tw.length, last_week_orders: lw.length,
+    avg_order_value: tw.length ? twRev / tw.length : 0,
+    prev_avg_order: lw.length ? lwRev / lw.length : 0,
+    new_customers: twCust.size, prev_new_customers: lwCust.size,
+    best_day: best?.[0] || '—', best_day_revenue: best?.[1] || 0,
+    week_label: `${w0.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })} – ${new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}`,
+    ai_insight: insight,
+  }
+}
+
 // ─── Main Dashboard ───────────────────────────────────────────────────────────
 
 export default function Dashboard({user,store,setPage}){
@@ -495,6 +561,7 @@ export default function Dashboard({user,store,setPage}){
   const [loading,setLoading]               = useState(true)
   const [inventoryIntel,setInventoryIntel] = useState({deadStock:[],starProducts:[],slowMoving:[]})
   const [smartAlerts,setSmartAlerts]       = useState([])
+  const [revRange,setRevRange]             = useState('30')
   const [weeklySummary,setWeeklySummary]   = useState(null)
   const [storeAgeDays,setStoreAgeDays]     = useState(0)
 
@@ -516,15 +583,16 @@ export default function Dashboard({user,store,setPage}){
 
   const loadAnalytics=async()=>{
     try{
-      const a=await api.get('/api/admin/analytics')
-      setAnal(a.data)
-      const age=a.data.store_age_days??0
+      const [a,o]=await Promise.all([api.get('/api/admin/analytics'),api.get('/api/admin/orders?limit=500')])
+      const allOrds=o.data.orders||[]
+      setAnal(a.data); setOrders(allOrds)
+      const age=Math.max(a.data.store_age_days??0, calcStoreAgeDays(allOrds))
       setStoreAgeDays(age)
       if(age>=14){
         const hasBackend=a.data.dead_stock||a.data.star_products||a.data.slow_moving
         setInventoryIntel(hasBackend?{deadStock:a.data.dead_stock||[],starProducts:a.data.star_products||[],slowMoving:a.data.slow_moving||[]}:classify14day(a.data.all_products||[]))
       }
-      if(a.data?.weekly_summary)setWeeklySummary(a.data.weekly_summary)
+      setWeeklySummary(a.data?.weekly_summary || buildWeeklySummary(allOrds))
     }catch(e){console.error(e)}
   }
 
@@ -535,18 +603,19 @@ export default function Dashboard({user,store,setPage}){
           api.get('/api/admin/stats'),
           api.get('/api/admin/analytics'),
           api.get('/api/admin/sessions/live'),
-          api.get('/api/admin/orders?limit=5')
+          api.get('/api/admin/orders?limit=500')
         ])
+        const allOrds = o.data.orders || []
         setStats(s.data); setAnal(a.data)
-        setSess(se.data.sessions||[]); setOrders(o.data.orders||[])
+        setSess(se.data.sessions||[]); setOrders(allOrds)
 
-        const age=a.data.store_age_days??0
+        const age = Math.max(a.data.store_age_days??0, calcStoreAgeDays(allOrds))
         setStoreAgeDays(age)
         if(age>=14){
           const hasBackend=a.data.dead_stock||a.data.star_products||a.data.slow_moving
           setInventoryIntel(hasBackend?{deadStock:a.data.dead_stock||[],starProducts:a.data.star_products||[],slowMoving:a.data.slow_moving||[]}:classify14day(a.data.all_products||[]))
         }
-        if(a.data?.weekly_summary)setWeeklySummary(a.data.weekly_summary)
+        setWeeklySummary(a.data?.weekly_summary || buildWeeklySummary(allOrds))
 
         const sd=s.data,newAlerts=[]
         if(sd){
@@ -576,6 +645,7 @@ export default function Dashboard({user,store,setPage}){
   const suspicious=sessions.filter(s=>{const m=s.minutes_ago,c=s.cart_total||0,i=s.item_count||0;return(m>=30&&c===0)||(m>=20&&c<50)||(m>=15&&i===0)})
   const fmt=v=>v!=null?`₹${Number(v).toLocaleString()}`:'—'
   const card={background:T.white,border:`1.5px solid ${T.border}`,borderRadius:18,boxShadow:T.shadow,overflow:'hidden'}
+  const revChartData = buildRevChart(orders, parseInt(revRange))
 
   // ── FIX: show note on monthly card if store is new (today = monthly) ──
   const isNewStore  = storeAgeDays < 3
@@ -636,12 +706,14 @@ export default function Dashboard({user,store,setPage}){
       <div style={{display:'grid',gridTemplateColumns:'1fr 290px',gap:16,marginBottom:18}}>
         <div style={{...card,padding:24,animation:'fadeUp 0.6s ease 0.5s both'}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
-            <div><h3 style={{fontSize:17,fontWeight:700,color:T.dark,marginBottom:2}}>Revenue Trend</h3><div style={{fontSize:11,color:T.muted2}}>Last 30 days · daily paid orders</div></div>
-            <span style={{fontSize:10,fontWeight:700,letterSpacing:'1px',color:T.blue,background:T.blueLight,border:`1px solid ${T.blueLight2}`,padding:'4px 10px',borderRadius:20}}>30D</span>
+            <div><h3 style={{fontSize:17,fontWeight:700,color:T.dark,marginBottom:2}}>Revenue Trend</h3><div style={{fontSize:11,color:T.muted2}}>Last {revRange} days · paid orders only</div></div>
+            <div style={{display:'flex',gap:4,background:T.bg,border:`1.5px solid ${T.border}`,borderRadius:9,padding:3}}>
+              {[['7','7D'],['30','30D']].map(([val,lbl])=><button key={val} onClick={()=>setRevRange(val)} style={{padding:'4px 10px',borderRadius:7,border:'none',background:revRange===val?T.blue:'transparent',color:revRange===val?'#fff':T.muted,fontSize:11,fontWeight:600,fontFamily:T.font,cursor:'pointer',transition:'all 0.15s'}}>{lbl}</button>)}
+            </div>
           </div>
-          {analytics?.revenue_chart?.length>0?(
+          {revChartData.some(d=>d.rev>0)?(
             <ResponsiveContainer width="100%" height={190}>
-              <AreaChart data={analytics.revenue_chart}>
+              <AreaChart data={revChartData}>
                 <defs><linearGradient id="rg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={T.blue} stopOpacity={0.15}/><stop offset="100%" stopColor={T.blue} stopOpacity={0}/></linearGradient></defs>
                 <XAxis dataKey="day" tick={{fill:T.muted2,fontSize:10,fontFamily:T.font}} axisLine={false} tickLine={false}/>
                 <YAxis tick={{fill:T.muted2,fontSize:10}} axisLine={false} tickLine={false} tickFormatter={v=>`₹${v}`}/>
@@ -650,7 +722,7 @@ export default function Dashboard({user,store,setPage}){
               </AreaChart>
             </ResponsiveContainer>
           ):(
-            <div style={{height:190,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',color:T.muted2}}><div style={{fontSize:32,opacity:0.2,marginBottom:10}}>∿</div><div style={{fontSize:13}}>No revenue data yet</div></div>
+            <div style={{height:190,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',color:T.muted2}}><div style={{fontSize:32,opacity:0.2,marginBottom:10}}>∿</div><div style={{fontSize:13}}>No paid orders in last {revRange} days</div></div>
           )}
         </div>
         <div style={{...card,padding:24,animation:'fadeUp 0.6s ease 0.6s both'}}>
@@ -685,7 +757,7 @@ export default function Dashboard({user,store,setPage}){
           {orders.length===0?<div style={{padding:'40px',textAlign:'center',color:T.muted2}}><div style={{fontSize:24,marginBottom:8,opacity:0.3}}>◫</div><div style={{fontSize:13}}>No orders yet</div></div>
           :orders.slice(0,5).map((o,i)=>(
             <div key={o.id} className="drow" style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'12px 22px',borderBottom:i<4?`1px solid ${T.border}`:'none',transition:'background 0.15s'}}>
-              <div><div style={{fontSize:13,fontWeight:600,color:T.dark}}>{o.users?.phone||'—'}</div><div style={{fontSize:11,color:T.muted2,marginTop:1}}>{new Date(o.created_at).toLocaleDateString('en-IN',{day:'2-digit',month:'short'})}</div></div>
+              <div><div style={{fontSize:13,fontWeight:600,color:T.dark}}>{o.users?.phone||'—'}</div><div style={{fontSize:11,color:T.muted2,marginTop:1}}>{toUTC(o.created_at).toLocaleDateString('en-IN',{day:'2-digit',month:'short'})}</div></div>
               <div style={{textAlign:'right'}}><div style={{fontSize:14,fontWeight:700,color:T.dark}}>₹{(o.total||0).toLocaleString()}</div><div style={{fontSize:9,fontWeight:700,letterSpacing:'1px',textTransform:'uppercase',marginTop:2,color:o.payment_status==='paid'?T.green:o.payment_status==='pending'?T.amber:T.red}}>{o.payment_status}</div></div>
             </div>
           ))}

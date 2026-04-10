@@ -6,7 +6,22 @@ const FIELD={width:'100%',padding:'9px 12px',background:T.bg,border:`1.5px solid
 const LABEL={display:'block',fontSize:9,fontWeight:700,color:T.muted2,marginBottom:5,letterSpacing:'2px',textTransform:'uppercase'}
 
 function parseCSV(text){const lines=text.trim().split('\n').filter(l=>l.trim());if(lines.length<2)return[];const headers=lines[0].split(',').map(h=>h.trim().toLowerCase().replace(/\s+/g,'_').replace(/['"]/g,''));return lines.slice(1).map(line=>{const vals=line.split(',').map(v=>v.trim().replace(/^"|"$/g,''));const obj={};headers.forEach((h,i)=>{obj[h]=vals[i]||''});return obj}).filter(r=>r.barcode||r.name)}
-function mapRow(row){return{barcode:row.barcode||row.ean||row.upc||row.code||'',name:row.name||row.product_name||row.product||'',brand:row.brand||row.brand_name||'',category:row.category||row.type||'',price:parseFloat(row.price||row.mrp||row.selling_price||0),stock_quantity:parseInt(row.stock_quantity||row.stock||row.quantity||row.qty||0),max_stock:parseInt(row.max_stock||row.max||row.capacity||row.stock||row.quantity||row.qty||100),available:true}}
+function fixBarcode(val){if(!val)return'';const s=String(val).trim();if(/\d[eE][+]?\d/.test(s)){const n=Math.round(parseFloat(s));return isNaN(n)?s:String(n)}return s}
+function mapRow(row){
+  const rawBarcode=row.barcode||row.ean||row.upc||row.code||''
+  const statusVal=(row.status||'').toLowerCase()
+  const inStock=statusVal?statusVal!=='out of stock':true
+  return{
+    barcode:fixBarcode(rawBarcode),
+    name:row.name||row.product_name||row.product||'',
+    brand:row.brand||row.brand_name||'',
+    category:row.category||row.type||'',
+    price:parseFloat(row.price||row.price_inr||row.mrp||row.selling_price||0)||0,
+    stock_quantity:parseInt(row.stock_quantity||row.stock_qty||row.stock||row.qty||0)||0,
+    max_stock:parseInt(row.max_stock||row.max_stock_qty||row.max||row.capacity||100)||100,
+    in_stock:inStock
+  }
+}
 
 export default function Products(){
   const [products,setProducts]=useState([])
@@ -44,16 +59,26 @@ export default function Products(){
 
   const runImport=async()=>{
     setImporting(true);setImportProgress(0);setImportError('')
-    let done=0;const failed=[]
+    // Build barcode → existing product ID map to handle upsert
+    let existingMap={}
+    try{const ex=await api.get('/api/admin/products');(ex.data.products||[]).forEach(p=>{if(p.barcode)existingMap[p.barcode]=p.store_product_id})}catch{}
+    let added=0,updated=0;const failedDetails=[]
     const BATCH=5
     for(let i=0;i<importRows.length;i+=BATCH){
       const batch=importRows.slice(i,i+BATCH)
-      const results=await Promise.allSettled(batch.map(row=>api.post('/api/admin/products',row)))
-      results.forEach((r,j)=>{if(r.status==='fulfilled')done++;else failed.push(batch[j].name)})
+      const results=await Promise.allSettled(batch.map(row=>{
+        const eid=existingMap[row.barcode]
+        return eid?api.put(`/api/admin/products/${eid}`,row):api.post('/api/admin/products',row)
+      }))
+      results.forEach((r,j)=>{
+        if(r.status==='fulfilled'){existingMap[batch[j].barcode]?updated++:added++}
+        else{const msg=r.reason?.response?.data?.error||r.reason?.message||'unknown error';failedDetails.push(`${batch[j].name} (${msg})`)}
+      })
       setImportProgress(Math.round(((i+BATCH)/importRows.length)*100))
     }
     setImporting(false);setImportDone(true)
-    if(failed.length)setImportError(`${failed.length} failed: ${failed.slice(0,3).join(', ')}`)
+    if(failedDetails.length)setImportError(`${failedDetails.length} failed: ${failedDetails.slice(0,2).join(' · ')}`)
+    else setImportError(`✓ ${added} added · ${updated} updated`)
     load()
   }
 
@@ -248,16 +273,17 @@ export default function Products(){
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}><h3 style={{fontSize:18,fontWeight:800,color:T.dark}}>Import Preview</h3>{!importing&&<button onClick={()=>setImportModal(false)} style={{background:T.bg,border:`1px solid ${T.border}`,borderRadius:8,width:28,height:28,cursor:'pointer',color:T.muted,fontSize:14}}>✕</button>}</div>
         <p style={{fontSize:12,color:T.muted2,marginBottom:16}}>📁 {fileName}</p>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:10,marginBottom:16}}>
-          {[['Found',importRows.length,T.blue,T.blueLight],['Ready',importRows.filter(r=>r.barcode&&r.name&&r.price>0).length,T.green,T.greenBg],['Issues',importRows.filter(r=>!r.barcode||!r.name||!r.price).length,T.amber,T.amberBg]].map(([l,v,c,bg])=>(
+          {[['Found',importRows.length,T.blue,T.blueLight],['Valid',importRows.filter(r=>r.barcode&&r.name).length,T.green,T.greenBg],['No Price',importRows.filter(r=>!r.price||r.price===0).length,T.amber,T.amberBg]].map(([l,v,c,bg])=>(
             <div key={l} style={{background:bg,borderRadius:10,padding:'10px 14px',textAlign:'center'}}><div style={{fontSize:24,fontWeight:800,color:c}}>{v}</div><div style={{fontSize:10,color:T.muted2,marginTop:2}}>{l}</div></div>
           ))}
+          {(()=>{const zeroPriceCount=importRows.filter(r=>!r.price||r.price===0).length;const allZero=zeroPriceCount===importRows.length&&zeroPriceCount>0;return zeroPriceCount>0&&(<div style={{gridColumn:'1/-1',padding:'10px 14px',background:allZero?T.redBg:T.amberBg,border:`1px solid ${allZero?T.redBdr:T.amberBdr}`,borderRadius:8,fontSize:11,color:allZero?T.red:T.amber,fontWeight:600}}>{allZero?`🚫 Your CSV has no "price" column — all ${zeroPriceCount} products will fail. Add a "price" column to your CSV and re-upload.`:`⚠ ${zeroPriceCount} products have ₹0 price — backend requires price > 0, these rows will fail. Add prices to your CSV or edit after import fails.`}</div>)})()}
         </div>
         <div style={{background:T.bg,borderRadius:10,overflow:'hidden',marginBottom:14,border:`1px solid ${T.border}`}}>
           <div style={{display:'grid',gridTemplateColumns:'2fr 1.5fr 1fr 1fr',padding:'8px 14px',background:T.blueLight,fontSize:9,fontWeight:700,color:T.muted2,letterSpacing:'2px',textTransform:'uppercase'}}><span>Name</span><span>Brand/Cat</span><span>Price</span><span>Stock</span></div>
           <div style={{maxHeight:200,overflow:'auto'}}>
-            {importRows.slice(0,100).map((row,i)=>{const valid=row.barcode&&row.name&&row.price>0;return(
-              <div key={i} style={{display:'grid',gridTemplateColumns:'2fr 1.5fr 1fr 1fr',padding:'8px 14px',borderBottom:i<importRows.length-1?`1px solid ${T.border}`:'none',background:valid?'transparent':T.amberBg,alignItems:'center'}}>
-                <span style={{fontSize:12,color:T.dark,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{!valid&&<span style={{color:T.amber,marginRight:4}}>⚠</span>}{row.name||'—'}</span>
+            {importRows.slice(0,100).map((row,i)=>{const valid=row.barcode&&row.name;const noPrice=valid&&(!row.price||row.price===0);return(
+              <div key={i} style={{display:'grid',gridTemplateColumns:'2fr 1.5fr 1fr 1fr',padding:'8px 14px',borderBottom:i<importRows.length-1?`1px solid ${T.border}`:'none',background:!valid?T.redBg:noPrice?T.amberBg:'transparent',alignItems:'center'}}>
+                <span style={{fontSize:12,color:T.dark,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{!valid&&<span style={{color:T.red,marginRight:4}}>✗</span>}{noPrice&&<span style={{color:T.amber,marginRight:4}}>₹</span>}{row.name||'—'}</span>
                 <span style={{fontSize:11,color:T.muted2}}>{row.brand||'—'}/{row.category||'—'}</span>
                 <span style={{fontSize:12,fontWeight:700,color:T.green}}>₹{row.price||0}</span>
                 {/* ── FIX: show qty/max in import preview ── */}
@@ -267,7 +293,10 @@ export default function Products(){
           </div>
         </div>
         {importing&&<div style={{marginBottom:14}}><div style={{display:'flex',justifyContent:'space-between',marginBottom:6}}><span style={{fontSize:12,color:T.dark,fontWeight:600}}>Importing…</span><span style={{fontSize:12,color:T.blue,fontWeight:700}}>{importProgress}%</span></div><div style={{height:6,background:T.blueLight,borderRadius:4,overflow:'hidden'}}><div style={{height:'100%',width:`${importProgress}%`,background:`linear-gradient(90deg,${T.blue},${T.blueSoft})`,borderRadius:4,transition:'width .3s'}}/></div></div>}
-        {importDone&&<div style={{marginBottom:14,padding:'10px 14px',background:T.greenBg,border:`1px solid ${T.greenBdr}`,borderRadius:10,color:T.green,fontSize:13,fontWeight:600}}>✅ Import complete! {importRows.length} products.{importError&&<div style={{color:T.amber,fontWeight:400,fontSize:12,marginTop:3}}>{importError}</div>}</div>}
+        {importDone&&<div style={{marginBottom:14,padding:'10px 14px',background:importError?.startsWith('✓')?T.greenBg:importError?T.amberBg:T.greenBg,border:`1px solid ${importError?.startsWith('✓')?T.greenBdr:importError?T.amberBdr:T.greenBdr}`,borderRadius:10,fontSize:13,fontWeight:600,color:importError?.startsWith('✓')?T.green:importError?T.amber:T.green}}>
+          {importError?.startsWith('✓')?`✅ Import complete! ${importError}`:`✅ Import done.`}
+          {importError&&!importError.startsWith('✓')&&<div style={{fontWeight:400,fontSize:12,marginTop:4,color:T.red}}>{importError}</div>}
+        </div>}
         <div style={{display:'flex',gap:10}}>
           {!importDone?<><button onClick={()=>setImportModal(false)} disabled={importing} style={{flex:1,padding:'10px',background:T.bg,border:`1.5px solid ${T.border}`,borderRadius:9,color:T.muted,fontSize:13,fontWeight:600,fontFamily:T.font,cursor:'pointer'}}>Cancel</button><button onClick={runImport} disabled={importing||!importRows.length} style={{flex:2,padding:'10px',background:importing?T.blueLight:`linear-gradient(135deg,${T.blue},${T.blue2})`,border:'none',borderRadius:9,color:importing?T.muted:'#fff',fontSize:13,fontWeight:700,fontFamily:T.font,cursor:importing?'not-allowed':'pointer',boxShadow:importing?'none':T.shadowBtn}}>{importing?`Importing ${importProgress}%…`:`⬆ Import ${importRows.length} Products`}</button></>:<button onClick={()=>setImportModal(false)} style={{flex:1,padding:'10px',background:`linear-gradient(135deg,${T.blue},${T.blue2})`,border:'none',borderRadius:9,color:'#fff',fontSize:13,fontWeight:700,fontFamily:T.font,cursor:'pointer'}}>Done ✓</button>}
         </div>

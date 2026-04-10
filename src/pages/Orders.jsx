@@ -19,9 +19,10 @@ const T = {
   font:"'Plus Jakarta Sans',sans-serif",
 }
 
-const fmtDate=d=>new Date(d).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'})
-const fmtShort=d=>new Date(d).toLocaleDateString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})
-const fmtDay=d=>new Date(d).toLocaleDateString('en-IN',{day:'2-digit',month:'short'})
+const toUTC=d=>new Date(typeof d==='string'&&!d.includes('Z')&&!d.includes('+')&&!d.includes('-',10)?d.replace(' ','T')+'Z':d)
+const fmtDate=d=>toUTC(d).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'})
+const fmtShort=d=>toUTC(d).toLocaleDateString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})
+const fmtDay=d=>toUTC(d).toLocaleDateString('en-IN',{day:'2-digit',month:'short'})
 const STATUS={paid:{bg:T.greenBg,color:T.green,bdr:T.greenBdr,label:'Paid'},pending:{bg:T.amberBg,color:T.amber,bdr:T.amberBdr,label:'Pending'},failed:{bg:T.redBg,color:T.red,bdr:T.redBdr,label:'Failed'}}
 
 function Badge({status,size='md'}){const s=STATUS[status]||STATUS.pending;return<span style={{background:s.bg,color:s.color,border:`1px solid ${s.bdr}`,fontSize:size==='sm'?9:11,fontWeight:700,padding:size==='sm'?'2px 7px':'3px 10px',borderRadius:20,fontFamily:T.font,whiteSpace:'nowrap'}}>{s.label}</span>}
