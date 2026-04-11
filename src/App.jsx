@@ -9,6 +9,7 @@ import Products   from './pages/Products'
 import Analytics  from './pages/Analytics'
 import QRCode     from './pages/QRCode'
 import Settings   from './pages/Settings'
+import Billing    from './pages/Billing'
 
 const PAGES = {
   dashboard:    Dashboard,
@@ -18,6 +19,7 @@ const PAGES = {
   analytics:    Analytics,
   qrcode:       QRCode,
   settings:     Settings,
+  billing:      Billing,
 }
 
 export default function App() {

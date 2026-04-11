@@ -40,13 +40,14 @@ function NivoLogo() {
 }
 
 const navItems=[
-  {id:'dashboard',label:'Dashboard',icon:'▣'},
-  {id:'orders',label:'Orders',icon:'◫'},
-  {id:'livesessions',label:'Live Sessions',icon:'◎'},
-  {id:'products',label:'Products',icon:'⊞'},
-  {id:'analytics',label:'Analytics',icon:'◈'},
-  {id:'qrcode',label:'QR Code',icon:'⊡'},
-  {id:'settings',label:'Settings',icon:'◉'},
+  {id:'dashboard',   label:'Dashboard',    icon:'▣', roles:null},
+  {id:'orders',      label:'Orders',       icon:'◫', roles:null},
+  {id:'livesessions',label:'Live Sessions',icon:'◎', roles:null},
+  {id:'products',    label:'Products',     icon:'⊞', roles:null},
+  {id:'analytics',   label:'Analytics',    icon:'◈', roles:null},
+  {id:'qrcode',      label:'QR Code',      icon:'⊡', roles:null},
+  {id:'settings',    label:'Settings',     icon:'◉', roles:null},
+  {id:'billing',     label:'Billing',      icon:'◎', roles:['super_admin']},
 ]
 
 export default function Layout({page,setPage,user,store,onLogout,children}){
@@ -61,12 +62,14 @@ export default function Layout({page,setPage,user,store,onLogout,children}){
         </div>
         {!collapsed&&store&&<div style={{margin:'12px 12px 0',padding:'10px 13px',background:'rgba(91,124,250,0.12)',border:'1px solid rgba(91,124,250,0.22)',borderRadius:12,animation:'fadeSlide 0.3s ease'}}><div style={{fontSize:8,color:'rgba(255,255,255,0.35)',fontWeight:700,letterSpacing:'2px',textTransform:'uppercase',marginBottom:3}}>Active Store</div><div style={{fontSize:13,fontWeight:700,color:'#fff',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{store.name}</div><div style={{fontSize:10,color:'rgba(91,124,250,0.8)',marginTop:2}}>{store.address||'● Online'}</div></div>}
         <nav style={{flex:1,padding:'14px 8px',display:'flex',flexDirection:'column',gap:2}}>
-          {navItems.map(item=>{
+          {navItems.filter(item=>!item.roles||item.roles.includes(user?.role)).map(item=>{
             const active=page===item.id
-            return(<div key={item.id} className="nav-lnk" onClick={()=>setPage(item.id)} style={{display:'flex',alignItems:'center',gap:10,padding:collapsed?'11px':'9px 13px',justifyContent:collapsed?'center':'flex-start',background:active?'rgba(91,124,250,0.18)':'transparent',border:active?'1px solid rgba(91,124,250,0.28)':'1px solid transparent',position:'relative'}} title={collapsed?item.label:''}>
-              {active&&<div style={{position:'absolute',left:0,top:'22%',bottom:'22%',width:3,background:T.blueSoft,borderRadius:'0 3px 3px 0',boxShadow:`0 0 8px ${T.blueSoft}`}}/>}
-              <span style={{fontSize:15,color:active?T.blueSoft:'rgba(255,255,255,0.3)',flexShrink:0}}>{item.icon}</span>
-              {!collapsed&&<span style={{fontSize:13,fontWeight:active?700:400,color:active?'#fff':'rgba(255,255,255,0.45)',animation:'fadeSlide 0.2s ease',whiteSpace:'nowrap'}}>{item.label}</span>}
+            const isBilling=item.id==='billing'
+            const activeColor=isBilling?'#F97316':T.blueSoft
+            return(<div key={item.id} className="nav-lnk" onClick={()=>setPage(item.id)} style={{display:'flex',alignItems:'center',gap:10,padding:collapsed?'11px':'9px 13px',justifyContent:collapsed?'center':'flex-start',background:active?(isBilling?'rgba(249,115,22,0.18)':'rgba(91,124,250,0.18)'):'transparent',border:active?`1px solid ${isBilling?'rgba(249,115,22,0.3)':'rgba(91,124,250,0.28)'}`:'1px solid transparent',position:'relative'}} title={collapsed?item.label:''}>
+              {active&&<div style={{position:'absolute',left:0,top:'22%',bottom:'22%',width:3,background:activeColor,borderRadius:'0 3px 3px 0',boxShadow:`0 0 8px ${activeColor}`}}/>}
+              <span style={{fontSize:15,color:active?activeColor:'rgba(255,255,255,0.3)',flexShrink:0}}>{item.icon}</span>
+              {!collapsed&&<span style={{fontSize:13,fontWeight:active?700:400,color:active?'#fff':'rgba(255,255,255,0.45)',animation:'fadeSlide 0.2s ease',whiteSpace:'nowrap'}}>{item.label}{isBilling&&!collapsed&&<span style={{marginLeft:6,fontSize:8,background:'rgba(249,115,22,0.3)',color:'#F97316',padding:'1px 5px',borderRadius:4,fontWeight:700,letterSpacing:'0.5px'}}>ADMIN</span>}</span>}
             </div>)
           })}
         </nav>

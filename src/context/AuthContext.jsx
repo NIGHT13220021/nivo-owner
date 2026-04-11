@@ -13,7 +13,7 @@ export function AuthProvider({ children }) {
     const role  = localStorage.getItem('nivo_owner_role')
     const phone = localStorage.getItem('nivo_owner_phone')
     const store = JSON.parse(localStorage.getItem('nivo_owner_store') || 'null')
-    if (token && role === 'store_owner') {
+    if (token && (role === 'store_owner' || role === 'super_admin')) {
       setUser({ token, role, phone, store })
     }
     setLoading(false)
@@ -22,7 +22,7 @@ export function AuthProvider({ children }) {
   const login = async (phone, password) => {
     const res = await api.post('/api/admin/login', { phone, password })
     const { token, role, store } = res.data
-    if (role !== 'store_owner') throw new Error('Not a store owner account.')
+    if (!['store_owner','super_admin'].includes(role)) throw new Error('Access denied.')
     localStorage.setItem('nivo_owner_token', token)
     localStorage.setItem('nivo_owner_role',  role)
     localStorage.setItem('nivo_owner_phone', phone)
