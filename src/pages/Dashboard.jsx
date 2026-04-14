@@ -647,12 +647,18 @@ export default function Dashboard({user,store,setPage}){
   const card={background:T.white,border:`1.5px solid ${T.border}`,borderRadius:18,boxShadow:T.shadow,overflow:'hidden'}
   const revChartData = buildRevChart(orders, parseInt(revRange))
 
-  // ── FIX: show note on monthly card if store is new (today = monthly) ──
-  const isNewStore  = storeAgeDays < 3
-  const todayRev    = stats?.today_revenue  ?? null
-  const monthRev    = stats?.month_revenue  ?? null
-  const monthNote   = isNewStore && todayRev!=null && monthRev!=null && todayRev===monthRev
-    ? '(store started today)' : ''
+  // ── Monthly card note ──
+  const isNewStore    = storeAgeDays < 3
+  const todayRev      = stats?.today_revenue  ?? null
+  const monthRev      = stats?.month_revenue  ?? null
+  const daysIntoMonth = new Date().getDate()
+  const daysInMonth   = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate()
+  const dailyAvg      = monthRev && daysIntoMonth > 0 ? Math.round(monthRev / daysIntoMonth) : 0
+  const monthNote     = isNewStore && todayRev != null && monthRev != null && todayRev === monthRev
+    ? '(store started today)'
+    : monthRev
+    ? `${daysIntoMonth} of ${daysInMonth} days · ₹${dailyAvg.toLocaleString()}/day avg`
+    : ''
 
   const cards=[
     {label:"Today's Revenue",  value:fmt(todayRev),                                               color:T.blue,   Scene:RingParticles, delay:0,   note:''},
@@ -697,6 +703,31 @@ export default function Dashboard({user,store,setPage}){
       </div>
 
       <SmartAlerts alerts={smartAlerts} onDismiss={id=>setSmartAlerts(a=>a.filter(x=>x.id!==id))}/>
+
+      {/* ── Flagged Sessions (left without paying) ── */}
+      {(analytics?.suspicious_sessions?.length > 0) && (
+        <div style={{marginBottom:18,animation:'fadeUp 0.5s ease 0.25s both'}}>
+          <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
+            <div style={{width:7,height:7,borderRadius:'50%',background:T.red}}/>
+            <span style={{fontSize:11,fontWeight:700,letterSpacing:'2px',textTransform:'uppercase',color:T.muted2}}>Flagged Today</span>
+            <span style={{fontSize:10,fontWeight:700,background:T.redBg,color:T.red,padding:'2px 7px',borderRadius:10,border:`1px solid ${T.redBdr}`}}>{analytics.suspicious_sessions.length}</span>
+          </div>
+          <div style={{background:T.white,border:`1.5px solid ${T.redBdr}`,borderRadius:14,overflow:'hidden',boxShadow:T.shadow}}>
+            {analytics.suspicious_sessions.map((s,i)=>(
+              <div key={i} style={{display:'flex',alignItems:'center',gap:12,padding:'11px 16px',borderBottom:i<analytics.suspicious_sessions.length-1?`1px solid ${T.border}`:'none'}}>
+                <div style={{width:30,height:30,borderRadius:8,background:T.redBg,border:`1px solid ${T.redBdr}`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,flexShrink:0}}>!</div>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:13,fontWeight:700,color:T.dark}}>Session {s.session_code}</div>
+                  <div style={{fontSize:11,color:T.red,marginTop:1}}>{s.items} item{s.items!==1?'s':''} scanned · left without paying</div>
+                </div>
+                <div style={{fontSize:11,color:T.muted2,flexShrink:0}}>
+                  {new Date(s.entry_time).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'})}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(200px,1fr))',gap:14,marginBottom:24}}>
         {cards.map((c,i)=><StatCard key={i} {...c}/>)}
